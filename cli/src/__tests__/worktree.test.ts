@@ -415,7 +415,9 @@ describe("worktree helpers", () => {
       });
 
       const config = JSON.parse(fs.readFileSync(path.join(repoRoot, ".paperclip", "config.json"), "utf8"));
-      expect(config.server.port).toBe(3102);
+      // Port must avoid the sibling's 3101 but may skip further if 3102+ is occupied on the host
+      expect(config.server.port).toBeGreaterThanOrEqual(3102);
+      expect(config.server.port).not.toBe(3101);
       expect(config.database.embeddedPostgresPort).not.toBe(54330);
       expect(config.database.embeddedPostgresPort).not.toBe(config.server.port);
       expect(config.database.embeddedPostgresPort).toBeGreaterThan(54330);

@@ -1914,11 +1914,19 @@ export function heartbeatService(db: Db) {
 
   async function resumeQueuedRuns() {
     const queuedRuns = await db
-      .select({ agentId: heartbeatRuns.agentId })
+      .select({ agentId: heartbeatRuns.agentId, createdAt: heartbeatRuns.createdAt })
       .from(heartbeatRuns)
-      .where(eq(heartbeatRuns.status, "queued"));
+      .where(eq(heartbeatRuns.status, "queued"))
+      .orderBy(asc(heartbeatRuns.createdAt));
 
-    const agentIds = [...new Set(queuedRuns.map((r) => r.agentId))];
+    const seen = new Set<string>();
+    const agentIds: string[] = [];
+    for (const r of queuedRuns) {
+      if (!seen.has(r.agentId)) {
+        seen.add(r.agentId);
+        agentIds.push(r.agentId);
+      }
+    }
     for (const agentId of agentIds) {
       await startNextQueuedRunForAgent(agentId);
     }
@@ -2951,6 +2959,7 @@ export function heartbeatService(db: Db) {
           executionRunId: null,
           executionAgentNameKey: null,
           executionLockedAt: null,
+          checkoutRunId: null,
           updatedAt: new Date(),
         })
         .where(eq(issues.id, issue.id));
@@ -3468,97 +3477,107 @@ export function heartbeatService(db: Db) {
       return newRun;
     }
 
-    const activeRuns = await db
-      .select()
-      .from(heartbeatRuns)
-      .where(and(eq(heartbeatRuns.agentId, agentId), inArray(heartbeatRuns.status, ["queued", "running"])))
-      .orderBy(desc(heartbeatRuns.createdAt));
+    const coalesceResult = await db.transaction(async (tx) => {
+      const activeRuns = await tx
+        .select()
+        .from(heartbeatRuns)
+        .where(and(eq(heartbeatRuns.agentId, agentId), inArray(heartbeatRuns.status, ["queued", "running"])))
+        .orderBy(desc(heartbeatRuns.createdAt));
 
-    const sameScopeQueuedRun = activeRuns.find(
-      (candidate) => candidate.status === "queued" && isSameTaskScope(runTaskKey(candidate), taskKey),
-    );
-    const sameScopeRunningRun = activeRuns.find(
-      (candidate) => candidate.status === "running" && isSameTaskScope(runTaskKey(candidate), taskKey),
-    );
-    const shouldQueueFollowupForCommentWake =
-      Boolean(wakeCommentId) && Boolean(sameScopeRunningRun) && !sameScopeQueuedRun;
-
-    const coalescedTargetRun =
-      sameScopeQueuedRun ??
-      (shouldQueueFollowupForCommentWake ? null : sameScopeRunningRun ?? null);
-
-    if (coalescedTargetRun) {
-      const mergedContextSnapshot = mergeCoalescedContextSnapshot(
-        coalescedTargetRun.contextSnapshot,
-        contextSnapshot,
+      const sameScopeQueuedRun = activeRuns.find(
+        (candidate) => candidate.status === "queued" && isSameTaskScope(runTaskKey(candidate), taskKey),
       );
-      const mergedRun = await db
-        .update(heartbeatRuns)
+      const sameScopeRunningRun = activeRuns.find(
+        (candidate) => candidate.status === "running" && isSameTaskScope(runTaskKey(candidate), taskKey),
+      );
+      const shouldQueueFollowupForCommentWake =
+        Boolean(wakeCommentId) && Boolean(sameScopeRunningRun) && !sameScopeQueuedRun;
+
+      const coalescedTargetRun =
+        sameScopeQueuedRun ??
+        (shouldQueueFollowupForCommentWake ? null : sameScopeRunningRun ?? null);
+
+      if (coalescedTargetRun) {
+        const mergedContextSnapshot = mergeCoalescedContextSnapshot(
+          coalescedTargetRun.contextSnapshot,
+          contextSnapshot,
+        );
+        const mergedRun = await tx
+          .update(heartbeatRuns)
+          .set({
+            contextSnapshot: mergedContextSnapshot,
+            updatedAt: new Date(),
+          })
+          .where(eq(heartbeatRuns.id, coalescedTargetRun.id))
+          .returning()
+          .then((rows) => rows[0] ?? coalescedTargetRun);
+
+        await tx.insert(agentWakeupRequests).values({
+          companyId: agent.companyId,
+          agentId,
+          source,
+          triggerDetail,
+          reason,
+          payload,
+          status: "coalesced",
+          coalescedCount: 1,
+          requestedByActorType: opts.requestedByActorType ?? null,
+          requestedByActorId: opts.requestedByActorId ?? null,
+          idempotencyKey: opts.idempotencyKey ?? null,
+          runId: mergedRun.id,
+          finishedAt: new Date(),
+        });
+        return { coalesced: true as const, run: mergedRun };
+      }
+
+      const wakeupRequest = await tx
+        .insert(agentWakeupRequests)
+        .values({
+          companyId: agent.companyId,
+          agentId,
+          source,
+          triggerDetail,
+          reason,
+          payload,
+          status: "queued",
+          requestedByActorType: opts.requestedByActorType ?? null,
+          requestedByActorId: opts.requestedByActorId ?? null,
+          idempotencyKey: opts.idempotencyKey ?? null,
+        })
+        .returning()
+        .then((rows) => rows[0]);
+
+      const newRun = await tx
+        .insert(heartbeatRuns)
+        .values({
+          companyId: agent.companyId,
+          agentId,
+          invocationSource: source,
+          triggerDetail,
+          status: "queued",
+          wakeupRequestId: wakeupRequest.id,
+          contextSnapshot: enrichedContextSnapshot,
+          sessionIdBefore: sessionBefore,
+        })
+        .returning()
+        .then((rows) => rows[0]);
+
+      await tx
+        .update(agentWakeupRequests)
         .set({
-          contextSnapshot: mergedContextSnapshot,
+          runId: newRun.id,
           updatedAt: new Date(),
         })
-        .where(eq(heartbeatRuns.id, coalescedTargetRun.id))
-        .returning()
-        .then((rows) => rows[0] ?? coalescedTargetRun);
+        .where(eq(agentWakeupRequests.id, wakeupRequest.id));
 
-      await db.insert(agentWakeupRequests).values({
-        companyId: agent.companyId,
-        agentId,
-        source,
-        triggerDetail,
-        reason,
-        payload,
-        status: "coalesced",
-        coalescedCount: 1,
-        requestedByActorType: opts.requestedByActorType ?? null,
-        requestedByActorId: opts.requestedByActorId ?? null,
-        idempotencyKey: opts.idempotencyKey ?? null,
-        runId: mergedRun.id,
-        finishedAt: new Date(),
-      });
-      return mergedRun;
+      return { coalesced: false as const, run: newRun };
+    });
+
+    if (coalesceResult.coalesced) {
+      return coalesceResult.run;
     }
 
-    const wakeupRequest = await db
-      .insert(agentWakeupRequests)
-      .values({
-        companyId: agent.companyId,
-        agentId,
-        source,
-        triggerDetail,
-        reason,
-        payload,
-        status: "queued",
-        requestedByActorType: opts.requestedByActorType ?? null,
-        requestedByActorId: opts.requestedByActorId ?? null,
-        idempotencyKey: opts.idempotencyKey ?? null,
-      })
-      .returning()
-      .then((rows) => rows[0]);
-
-    const newRun = await db
-      .insert(heartbeatRuns)
-      .values({
-        companyId: agent.companyId,
-        agentId,
-        invocationSource: source,
-        triggerDetail,
-        status: "queued",
-        wakeupRequestId: wakeupRequest.id,
-        contextSnapshot: enrichedContextSnapshot,
-        sessionIdBefore: sessionBefore,
-      })
-      .returning()
-      .then((rows) => rows[0]);
-
-    await db
-      .update(agentWakeupRequests)
-      .set({
-        runId: newRun.id,
-        updatedAt: new Date(),
-      })
-      .where(eq(agentWakeupRequests.id, wakeupRequest.id));
+    const newRun = coalesceResult.run;
 
     publishLiveEvent({
       companyId: newRun.companyId,
@@ -3720,10 +3739,13 @@ export function heartbeatService(db: Db) {
   }
 
   async function cancelActiveForAgentInternal(agentId: string, reason = "Cancelled due to agent pause") {
+    // Snapshot active runs atomically so deferred promotions from releaseIssueExecutionAndPromote
+    // cannot insert new runs that slip past the cancel sweep.
     const runs = await db
       .select()
       .from(heartbeatRuns)
-      .where(and(eq(heartbeatRuns.agentId, agentId), inArray(heartbeatRuns.status, ["queued", "running"])));
+      .where(and(eq(heartbeatRuns.agentId, agentId), inArray(heartbeatRuns.status, ["queued", "running"])))
+      .orderBy(asc(heartbeatRuns.createdAt));
 
     for (const run of runs) {
       await setRunStatus(run.id, "cancelled", {
@@ -3745,7 +3767,21 @@ export function heartbeatService(db: Db) {
       await releaseIssueExecutionAndPromote(run);
     }
 
-    return runs.length;
+    // Re-check for runs promoted by releaseIssueExecutionAndPromote during the loop above.
+    const stragglers = await db
+      .select({ id: heartbeatRuns.id })
+      .from(heartbeatRuns)
+      .where(and(eq(heartbeatRuns.agentId, agentId), inArray(heartbeatRuns.status, ["queued", "running"])));
+
+    for (const straggler of stragglers) {
+      await setRunStatus(straggler.id, "cancelled", {
+        finishedAt: new Date(),
+        error: reason,
+        errorCode: "cancelled",
+      });
+    }
+
+    return runs.length + stragglers.length;
   }
 
   async function cancelBudgetScopeWork(scope: BudgetEnforcementScope) {

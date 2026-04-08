@@ -37,10 +37,24 @@ import { getDefaultCompanyGoal } from "./goals.js";
 const ALL_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked", "done", "cancelled"];
 const MAX_ISSUE_COMMENT_PAGE_LIMIT = 500;
 
+const VALID_TRANSITIONS: Record<string, string[]> = {
+  backlog:     ["todo", "in_progress", "cancelled"],
+  todo:        ["backlog", "in_progress", "blocked", "cancelled"],
+  in_progress: ["todo", "in_review", "blocked", "done", "cancelled"],
+  in_review:   ["in_progress", "done", "cancelled"],
+  blocked:     ["todo", "in_progress", "cancelled"],
+  done:        ["todo", "in_progress"],
+  cancelled:   ["todo", "backlog"],
+};
+
 function assertTransition(from: string, to: string) {
   if (from === to) return;
   if (!ALL_ISSUE_STATUSES.includes(to)) {
     throw conflict(`Unknown issue status: ${to}`);
+  }
+  const allowed = VALID_TRANSITIONS[from];
+  if (allowed && !allowed.includes(to)) {
+    throw conflict(`Invalid status transition from "${from}" to "${to}"`);
   }
 }
 

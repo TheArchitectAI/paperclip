@@ -42,9 +42,21 @@ vi.mock("../services/index.js", () => ({
   logActivity: mockLogActivity,
 }));
 
+let cachedPortabilityModules: { companyRoutes: any; errorHandler: any } | null = null;
+
+async function loadPortabilityModules() {
+  if (!cachedPortabilityModules) {
+    const [{ companyRoutes }, { errorHandler }] = await Promise.all([
+      import("../routes/companies.js"),
+      import("../middleware/index.js"),
+    ]);
+    cachedPortabilityModules = { companyRoutes, errorHandler };
+  }
+  return cachedPortabilityModules;
+}
+
 async function createApp(actor: Record<string, unknown>) {
-  const { companyRoutes } = await import("../routes/companies.js");
-  const { errorHandler } = await import("../middleware/index.js");
+  const { companyRoutes, errorHandler } = await loadPortabilityModules();
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
@@ -58,7 +70,6 @@ async function createApp(actor: Record<string, unknown>) {
 
 describe("company portability routes", () => {
   beforeEach(() => {
-    vi.resetModules();
     mockAgentService.getById.mockReset();
     mockCompanyPortabilityService.exportBundle.mockReset();
     mockCompanyPortabilityService.previewExport.mockReset();

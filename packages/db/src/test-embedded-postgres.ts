@@ -130,6 +130,9 @@ export async function startEmbeddedPostgresTestDatabase(
     return {
       connectionString,
       cleanup: async () => {
+        // Allow postgres.js setImmediate callbacks to drain before stopping
+        // the instance — prevents "Cannot read properties of null (reading 'write')" errors.
+        await new Promise((resolve) => setTimeout(resolve, 100));
         await instance.stop().catch(() => {});
         fs.rmSync(dataDir, { recursive: true, force: true });
       },

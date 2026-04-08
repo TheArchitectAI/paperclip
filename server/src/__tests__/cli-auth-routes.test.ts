@@ -34,28 +34,38 @@ vi.mock("../services/index.js", () => ({
   deduplicateAgentName: vi.fn((name: string) => name),
 }));
 
-function createApp(actor: any) {
+let cachedModules: { accessRoutes: any; errorHandler: any } | null = null;
+
+async function loadRouteModules() {
+  if (!cachedModules) {
+    const [{ accessRoutes }, { errorHandler }] = await Promise.all([
+      import("../routes/access.js"),
+      import("../middleware/index.js"),
+    ]);
+    cachedModules = { accessRoutes, errorHandler };
+  }
+  return cachedModules;
+}
+
+async function createApp(actor: any) {
+  const { accessRoutes, errorHandler } = await loadRouteModules();
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
     req.actor = actor;
     next();
   });
-  return import("../routes/access.js").then(({ accessRoutes }) =>
-    import("../middleware/index.js").then(({ errorHandler }) => {
-      app.use(
-        "/api",
-        accessRoutes({} as any, {
-          deploymentMode: "authenticated",
-          deploymentExposure: "private",
-          bindHost: "127.0.0.1",
-          allowedHostnames: [],
-        }),
-      );
-      app.use(errorHandler);
-      return app;
-    })
+  app.use(
+    "/api",
+    accessRoutes({} as any, {
+      deploymentMode: "authenticated",
+      deploymentExposure: "private",
+      bindHost: "127.0.0.1",
+      allowedHostnames: [],
+    }),
   );
+  app.use(errorHandler);
+  return app;
 }
 
 describe("cli auth routes", () => {
