@@ -17,6 +17,11 @@ type EmbeddedPostgresInfo = {
   port: number;
 };
 
+export type AgentJwtSecretStatus = {
+  status: "pass" | "warn";
+  message: string;
+};
+
 type StartupBannerOptions = {
   bind: BindMode;
   host: string;
@@ -34,6 +39,14 @@ type StartupBannerOptions = {
   databaseBackupIntervalMinutes: number;
   databaseBackupRetentionDays: number;
   databaseBackupDir: string;
+  /**
+   * Optional pre-resolved status for the agent JWT secret. When supplied
+   * (e.g. by the startup path that prewarmed the secret from GCP Secret
+   * Manager), the banner reports this instead of inspecting env vars + the
+   * local .env file. Lets the banner reflect Secret-Manager-backed deployments
+   * truthfully.
+   */
+  agentJwtSecretStatus?: AgentJwtSecretStatus;
 };
 
 const ansi = {
@@ -104,7 +117,7 @@ export function printStartupBanner(opts: StartupBannerOptions): void {
   const uiUrl = opts.uiMode === "none" ? "disabled" : baseUrl;
   const configPath = resolvePaperclipConfigPath();
   const envFilePath = resolvePaperclipEnvPath();
-  const agentJwtSecret = resolveAgentJwtSecretStatus(envFilePath);
+  const agentJwtSecret = opts.agentJwtSecretStatus ?? resolveAgentJwtSecretStatus(envFilePath);
 
   const dbMode =
     opts.db.mode === "embedded-postgres"

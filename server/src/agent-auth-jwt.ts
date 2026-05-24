@@ -1,5 +1,12 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
+import {
+  getSecret,
+  prewarmInfrastructureSecret,
+  type GetInfrastructureSecretOptions,
+  type InfrastructureSecretError,
+} from "./lib/secrets.js";
+
 interface JwtHeader {
   alg: string;
   typ?: string;
@@ -19,22 +26,67 @@ export interface LocalAgentJwtClaims {
 
 const JWT_ALGORITHM = "HS256";
 
+export const AGENT_JWT_SECRET_NAME = "PAPERCLIP_AGENT_JWT_SECRET";
+
+/**
+ * Env vars that may supply the JWT signing secret. Listed in priority order.
+ * `BETTER_AUTH_SECRET` is honored for backwards compatibility with deployments
+ * that share the signing key between agent JWTs and Better Auth sessions.
+ */
+const AGENT_JWT_ENV_KEYS = [
+  AGENT_JWT_SECRET_NAME,
+  "BETTER_AUTH_SECRET",
+] as const;
+
 function parseNumber(value: string | undefined, fallback: number) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
   return Math.floor(parsed);
 }
 
-function jwtConfig() {
-  const secret = process.env.PAPERCLIP_AGENT_JWT_SECRET?.trim() || process.env.BETTER_AUTH_SECRET?.trim();
-  if (!secret) return null;
-
+function staticJwtConfig() {
   return {
-    secret,
     ttlSeconds: parseNumber(process.env.PAPERCLIP_AGENT_JWT_TTL_SECONDS, 60 * 60 * 48),
     issuer: process.env.PAPERCLIP_AGENT_JWT_ISSUER ?? "paperclip",
     audience: process.env.PAPERCLIP_AGENT_JWT_AUDIENCE ?? "paperclip-api",
   };
+}
+
+/** Test-only: lets a test inject a fake secret resolver / env override. */
+let secretOptionsOverride: GetInfrastructureSecretOptions | null = null;
+
+export function __setAgentJwtSecretOptionsForTests(
+  options: GetInfrastructureSecretOptions | null,
+): void {
+  secretOptionsOverride = options;
+}
+
+async function resolveAgentJwtSecret(): Promise<string | null> {
+  try {
+    return await getSecret(AGENT_JWT_SECRET_NAME, {
+      ...(secretOptionsOverride ?? {}),
+      envKeys: AGENT_JWT_ENV_KEYS,
+    });
+  } catch {
+    // Surface as "no JWT configured" — callers already handle null by
+    // returning null tokens / failing verification, which matches the
+    // pre-refactor behavior when env vars were unset.
+    return null;
+  }
+}
+
+/**
+ * Eagerly populates the secret cache. Call once at server startup so the first
+ * authenticated request does not pay the Secret Manager cold-cache cost.
+ */
+export async function prewarmAgentJwtSecret(
+  onError?: (err: InfrastructureSecretError | Error) => void,
+): Promise<void> {
+  await prewarmInfrastructureSecret(AGENT_JWT_SECRET_NAME, {
+    ...(secretOptionsOverride ?? {}),
+    envKeys: AGENT_JWT_ENV_KEYS,
+    ...(onError ? { onError } : {}),
+  });
 }
 
 function base64UrlEncode(value: string) {
@@ -65,9 +117,15 @@ function safeCompare(a: string, b: string) {
   return timingSafeEqual(left, right);
 }
 
-export function createLocalAgentJwt(agentId: string, companyId: string, adapterType: string, runId: string) {
-  const config = jwtConfig();
-  if (!config) return null;
+export async function createLocalAgentJwt(
+  agentId: string,
+  companyId: string,
+  adapterType: string,
+  runId: string,
+): Promise<string | null> {
+  const secret = await resolveAgentJwtSecret();
+  if (!secret) return null;
+  const config = staticJwtConfig();
 
   const now = Math.floor(Date.now() / 1000);
   const claims: LocalAgentJwtClaims = {
@@ -81,21 +139,22 @@ export function createLocalAgentJwt(agentId: string, companyId: string, adapterT
     aud: config.audience,
   };
 
-  const header = {
+  const header: JwtHeader = {
     alg: JWT_ALGORITHM,
     typ: "JWT",
   };
 
   const signingInput = `${base64UrlEncode(JSON.stringify(header))}.${base64UrlEncode(JSON.stringify(claims))}`;
-  const signature = signPayload(config.secret, signingInput);
+  const signature = signPayload(secret, signingInput);
 
   return `${signingInput}.${signature}`;
 }
 
-export function verifyLocalAgentJwt(token: string): LocalAgentJwtClaims | null {
+export async function verifyLocalAgentJwt(token: string): Promise<LocalAgentJwtClaims | null> {
   if (!token) return null;
-  const config = jwtConfig();
-  if (!config) return null;
+  const secret = await resolveAgentJwtSecret();
+  if (!secret) return null;
+  const config = staticJwtConfig();
 
   const parts = token.split(".");
   if (parts.length !== 3) return null;
@@ -105,7 +164,7 @@ export function verifyLocalAgentJwt(token: string): LocalAgentJwtClaims | null {
   if (!header || header.alg !== JWT_ALGORITHM) return null;
 
   const signingInput = `${headerB64}.${claimsB64}`;
-  const expectedSig = signPayload(config.secret, signingInput);
+  const expectedSig = signPayload(secret, signingInput);
   if (!safeCompare(signature, expectedSig)) return null;
 
   const claims = parseJson(base64UrlDecode(claimsB64));

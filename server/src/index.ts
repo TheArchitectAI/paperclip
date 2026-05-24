@@ -37,7 +37,8 @@ import {
 } from "./services/index.js";
 import { createFeedbackTraceShareClientFromConfig } from "./services/feedback-share-client.js";
 import { createStorageServiceFromConfig } from "./storage/index.js";
-import { printStartupBanner } from "./startup-banner.js";
+import { printStartupBanner, type AgentJwtSecretStatus } from "./startup-banner.js";
+import { prewarmAgentJwtSecret } from "./agent-auth-jwt.js";
 import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
 import { maybePersistWorktreeRuntimePorts } from "./worktree-config.js";
 import { initTelemetry, getTelemetryClient } from "./telemetry.js";
@@ -494,12 +495,38 @@ export async function startServer(): Promise<StartedServer> {
       },
       "Authenticated mode auth origin configuration",
     );
-    const auth = createBetterAuthInstance(db as any, config, effectiveTrustedOrigins);
+    const auth = await createBetterAuthInstance(db as any, config, effectiveTrustedOrigins);
     betterAuthHandler = createBetterAuthHandler(auth);
     resolveSession = (req) => resolveBetterAuthSession(auth, req);
     resolveSessionFromHeaders = (headers) => resolveBetterAuthSessionFromHeaders(auth, headers);
     await initializeBoardClaimChallenge(db as any, { deploymentMode: config.deploymentMode });
     authReady = true;
+  }
+
+  // Eagerly populate the agent-JWT secret cache so the first authenticated
+  // request does not pay the GCP Secret Manager cold-cache latency. Failures
+  // are non-fatal here — the first real consumer will surface a real error.
+  let agentJwtSecretBannerStatus: AgentJwtSecretStatus | undefined;
+  {
+    const { getInfrastructureSecret } = await import("./lib/secrets.js");
+    const { AGENT_JWT_SECRET_NAME } = await import("./agent-auth-jwt.js");
+    await prewarmAgentJwtSecret((err) => {
+      logger.warn({ err: err.message }, "Failed to prewarm agent JWT secret");
+    });
+    try {
+      const resolved = await getInfrastructureSecret(AGENT_JWT_SECRET_NAME, {
+        envKeys: [AGENT_JWT_SECRET_NAME, "BETTER_AUTH_SECRET"],
+      });
+      agentJwtSecretBannerStatus = {
+        status: "pass",
+        message:
+          resolved.source === "gcp_secret_manager"
+            ? "loaded from gcp_secret_manager"
+            : `set (${resolved.envKeyUsed ?? "env"})`,
+      };
+    } catch {
+      // Leave undefined → banner falls back to legacy env/file inspection.
+    }
   }
   
   const listenPort = await detectPort(config.port);
@@ -740,6 +767,7 @@ export async function startServer(): Promise<StartedServer> {
         databaseBackupIntervalMinutes: config.databaseBackupIntervalMinutes,
         databaseBackupRetentionDays: config.databaseBackupRetentionDays,
         databaseBackupDir: config.databaseBackupDir,
+        ...(agentJwtSecretBannerStatus ? { agentJwtSecretStatus: agentJwtSecretBannerStatus } : {}),
       });
 
       const boardClaimUrl = getBoardClaimWarningUrl(config.host, listenPort);

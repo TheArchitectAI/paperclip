@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLocalAgentJwt, verifyLocalAgentJwt } from "../agent-auth-jwt.js";
+import { __resetInfrastructureSecretCacheForTests } from "../lib/secrets.js";
 
 describe("agent local JWT", () => {
   const secretEnv = "PAPERCLIP_AGENT_JWT_SECRET";
@@ -17,6 +18,7 @@ describe("agent local JWT", () => {
   };
 
   beforeEach(() => {
+    __resetInfrastructureSecretCacheForTests();
     process.env[secretEnv] = "test-secret";
     delete process.env[betterAuthSecretEnv];
     process.env[ttlEnv] = "3600";
@@ -27,6 +29,7 @@ describe("agent local JWT", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    __resetInfrastructureSecretCacheForTests();
     if (originalEnv.secret === undefined) delete process.env[secretEnv];
     else process.env[secretEnv] = originalEnv.secret;
     if (originalEnv.betterAuthSecret === undefined) delete process.env[betterAuthSecretEnv];
@@ -39,12 +42,12 @@ describe("agent local JWT", () => {
     else process.env[audienceEnv] = originalEnv.audience;
   });
 
-  it("creates and verifies a token", () => {
+  it("creates and verifies a token", async () => {
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
-    const token = createLocalAgentJwt("agent-1", "company-1", "claude_local", "run-1");
+    const token = await createLocalAgentJwt("agent-1", "company-1", "claude_local", "run-1");
     expect(typeof token).toBe("string");
 
-    const claims = verifyLocalAgentJwt(token!);
+    const claims = await verifyLocalAgentJwt(token!);
     expect(claims).toMatchObject({
       sub: "agent-1",
       company_id: "company-1",
@@ -55,21 +58,32 @@ describe("agent local JWT", () => {
     });
   });
 
-  it("returns null when secret is missing", () => {
+  it("returns null when secret is missing", async () => {
+    __resetInfrastructureSecretCacheForTests();
     process.env[secretEnv] = "";
-    const token = createLocalAgentJwt("agent-1", "company-1", "claude_local", "run-1");
-    expect(token).toBeNull();
-    expect(verifyLocalAgentJwt("abc.def.ghi")).toBeNull();
+    // Clear any GCP project env that could trigger Secret Manager lookup.
+    const gcpProject = process.env.GCP_PROJECT;
+    const googleCloudProject = process.env.GOOGLE_CLOUD_PROJECT;
+    delete process.env.GCP_PROJECT;
+    delete process.env.GOOGLE_CLOUD_PROJECT;
+    try {
+      const token = await createLocalAgentJwt("agent-1", "company-1", "claude_local", "run-1");
+      expect(token).toBeNull();
+      expect(await verifyLocalAgentJwt("abc.def.ghi")).toBeNull();
+    } finally {
+      if (gcpProject !== undefined) process.env.GCP_PROJECT = gcpProject;
+      if (googleCloudProject !== undefined) process.env.GOOGLE_CLOUD_PROJECT = googleCloudProject;
+    }
   });
 
-  it("falls back to BETTER_AUTH_SECRET when PAPERCLIP_AGENT_JWT_SECRET is absent", () => {
+  it("falls back to BETTER_AUTH_SECRET when PAPERCLIP_AGENT_JWT_SECRET is absent", async () => {
     delete process.env[secretEnv];
     process.env[betterAuthSecretEnv] = "fallback-secret";
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
-    const token = createLocalAgentJwt("agent-1", "company-1", "claude_local", "run-1");
+    const token = await createLocalAgentJwt("agent-1", "company-1", "claude_local", "run-1");
     expect(typeof token).toBe("string");
 
-    const claims = verifyLocalAgentJwt(token!);
+    const claims = await verifyLocalAgentJwt(token!);
     expect(claims).toMatchObject({
       sub: "agent-1",
       company_id: "company-1",
@@ -78,23 +92,23 @@ describe("agent local JWT", () => {
     });
   });
 
-  it("rejects expired tokens", () => {
+  it("rejects expired tokens", async () => {
     process.env[ttlEnv] = "1";
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
-    const token = createLocalAgentJwt("agent-1", "company-1", "claude_local", "run-1");
+    const token = await createLocalAgentJwt("agent-1", "company-1", "claude_local", "run-1");
 
     vi.setSystemTime(new Date("2026-01-01T00:00:05.000Z"));
-    expect(verifyLocalAgentJwt(token!)).toBeNull();
+    expect(await verifyLocalAgentJwt(token!)).toBeNull();
   });
 
-  it("rejects issuer/audience mismatch", () => {
+  it("rejects issuer/audience mismatch", async () => {
     process.env[issuerEnv] = "custom-issuer";
     process.env[audienceEnv] = "custom-audience";
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
-    const token = createLocalAgentJwt("agent-1", "company-1", "codex_local", "run-1");
+    const token = await createLocalAgentJwt("agent-1", "company-1", "codex_local", "run-1");
 
     process.env[issuerEnv] = "paperclip";
     process.env[audienceEnv] = "paperclip-api";
-    expect(verifyLocalAgentJwt(token!)).toBeNull();
+    expect(await verifyLocalAgentJwt(token!)).toBeNull();
   });
 });

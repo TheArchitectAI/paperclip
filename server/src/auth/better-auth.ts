@@ -11,6 +11,19 @@ import {
   authVerifications,
 } from "@paperclipai/db";
 import type { Config } from "../config.js";
+import { getSecret } from "../lib/secrets.js";
+
+export const BETTER_AUTH_SECRET_NAME = "BETTER_AUTH_SECRET";
+
+/**
+ * Env vars consulted before contacting GCP Secret Manager. `PAPERCLIP_AGENT_JWT_SECRET`
+ * is retained for backwards compatibility with deployments that share the
+ * signing key between agent JWTs and Better Auth sessions.
+ */
+const BETTER_AUTH_SECRET_ENV_KEYS = [
+  BETTER_AUTH_SECRET_NAME,
+  "PAPERCLIP_AGENT_JWT_SECRET",
+] as const;
 
 export type BetterAuthSessionUser = {
   id: string;
@@ -65,13 +78,17 @@ export function deriveAuthTrustedOrigins(config: Config): string[] {
   return Array.from(trustedOrigins);
 }
 
-export function createBetterAuthInstance(db: Db, config: Config, trustedOrigins?: string[]): BetterAuthInstance {
+export async function createBetterAuthInstance(db: Db, config: Config, trustedOrigins?: string[]): Promise<BetterAuthInstance> {
   const baseUrl = config.authBaseUrlMode === "explicit" ? config.authPublicBaseUrl : undefined;
-  const secret = process.env.BETTER_AUTH_SECRET ?? process.env.PAPERCLIP_AGENT_JWT_SECRET;
-  if (!secret) {
+  let secret: string;
+  try {
+    secret = await getSecret(BETTER_AUTH_SECRET_NAME, { envKeys: BETTER_AUTH_SECRET_ENV_KEYS });
+  } catch (err) {
     throw new Error(
-      "BETTER_AUTH_SECRET (or PAPERCLIP_AGENT_JWT_SECRET) must be set. " +
-      "For local development, set BETTER_AUTH_SECRET=paperclip-dev-secret in your .env file.",
+      "BETTER_AUTH_SECRET (or PAPERCLIP_AGENT_JWT_SECRET) must be set, either as an environment " +
+      "variable or via GCP Secret Manager. For local development, set " +
+      "BETTER_AUTH_SECRET=paperclip-dev-secret in your .env file. " +
+      `(underlying: ${err instanceof Error ? err.message : String(err)})`,
     );
   }
   const effectiveTrustedOrigins = trustedOrigins ?? deriveAuthTrustedOrigins(config);
