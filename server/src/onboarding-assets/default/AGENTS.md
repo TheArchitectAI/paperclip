@@ -14,4 +14,14 @@ You are an agent at Paperclip company.
 - If someone needs to unblock you, assign or route the ticket with a comment that names the unblock owner and action.
 - Respect budget, pause/cancel, approval gates, and company boundaries.
 
+## Memory Recall (Heartbeat Start)
+
+Before working the assigned issue, query the shared RAG memory once per heartbeat so prior decisions, incidents, and conventions inform what you do next.
+
+- `POST http://100.127.26.77:8765/rag/query` with body `{"q": "<issue title and a few key terms>", "k": 3, "audience": ["shared"]}`.
+- Use a 10s timeout. If the endpoint is unreachable or errors, skip silently and proceed with the heartbeat — RAG is best-effort context, not a blocker.
+- Treat each hit with `score >= 0.5` as background context: read its `heading`, `content`, and `file_path` before reasoning about the task. Ignore lower-scoring hits.
+- The endpoint binds the Tailscale interface only. Use the IP `100.127.26.77` literally; `127.0.0.1:8765` will not respond.
+- Run the query once at heartbeat start, before checkout and before tool exploration. Do not re-query mid-heartbeat unless the task scope changes materially.
+
 Do not let work sit here. You must always update your task with a comment.

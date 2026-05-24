@@ -7,7 +7,17 @@ Run this checklist on every heartbeat. This covers both your local planning/memo
 - `GET /api/agents/me` -- confirm your id, role, budget, chainOfCommand.
 - Check wake context: `PAPERCLIP_TASK_ID`, `PAPERCLIP_WAKE_REASON`, `PAPERCLIP_WAKE_COMMENT_ID`.
 
-## 2. Local Planning Check
+## 2. Memory Recall (Shared RAG)
+
+Before planning or acting on the heartbeat's assigned issue, query the shared RAG memory once so prior decisions, incidents, and conventions inform what you do next. This is in addition to your own PARA memory.
+
+- `POST http://100.127.26.77:8765/rag/query` with body `{"q": "<issue title and a few key terms>", "k": 3, "audience": ["shared"]}`.
+- Use a 10s timeout. If the endpoint is unreachable or errors, skip silently and proceed — RAG is best-effort context, not a blocker.
+- Treat each hit with `score >= 0.5` as background context: read its `heading`, `content`, and `file_path` before reasoning about the task. Ignore lower-scoring hits.
+- The endpoint binds the Tailscale interface only. Use the IP `100.127.26.77` literally; `127.0.0.1:8765` will not respond.
+- Run the query once per heartbeat, before checkout and broad tool exploration. Do not re-query mid-heartbeat unless the task scope changes materially.
+
+## 3. Local Planning Check
 
 1. Read today's plan from `$AGENT_HOME/memory/YYYY-MM-DD.md` under "## Today's Plan".
 2. Review each planned item: what's completed, what's blocked, and what up next.
@@ -15,21 +25,21 @@ Run this checklist on every heartbeat. This covers both your local planning/memo
 4. If you're ahead, start on the next highest priority.
 5. Record progress updates in the daily notes.
 
-## 3. Approval Follow-Up
+## 4. Approval Follow-Up
 
 If `PAPERCLIP_APPROVAL_ID` is set:
 
 - Review the approval and its linked issues.
 - Close resolved issues or comment on what remains open.
 
-## 4. Get Assignments
+## 5. Get Assignments
 
 - `GET /api/companies/{companyId}/issues?assigneeAgentId={your-id}&status=todo,in_progress,in_review,blocked`
 - Prioritize: `in_progress` first, then `in_review` when you were woken by a comment on it, then `todo`. Skip `blocked` unless you can unblock it.
 - If there is already an active run on an `in_progress` task, just move on to the next thing.
 - If `PAPERCLIP_TASK_ID` is set and assigned to you, prioritize that task.
 
-## 5. Checkout and Work
+## 6. Checkout and Work
 
 - For scoped issue wakes, Paperclip may already checkout the current issue in the harness before your run starts.
 - Only call `POST /api/issues/{id}/checkout` yourself when you intentionally switch to a different task or the wake context did not already claim the issue.
@@ -45,7 +55,7 @@ Status quick guide:
 - `done`: finished.
 - `cancelled`: intentionally dropped.
 
-## 6. Delegation
+## 7. Delegation
 
 - Create subtasks with `POST /api/companies/{companyId}/issues`. Always set `parentId` and `goalId`. For non-child follow-ups that must stay on the same checkout/worktree, set `inheritExecutionWorkspaceFromIssueId` to the source issue.
 - When you know the needed work and owner, create those subtasks directly. When the board/user must choose from a proposed task tree, answer structured questions, or confirm a proposal before you can proceed, create an issue-thread interaction on the current issue with `POST /api/issues/{issueId}/interactions` using `kind: "suggest_tasks"`, `kind: "ask_user_questions"`, or `kind: "request_confirmation"` and `continuationPolicy: "wake_assignee"` when the answer should wake you.
@@ -54,14 +64,14 @@ Status quick guide:
 - Use `paperclip-create-agent` skill when hiring new agents.
 - Assign work to the right agent for the job.
 
-## 7. Fact Extraction
+## 8. Fact Extraction
 
 1. Check for new conversations since last extraction.
 2. Extract durable facts to the relevant entity in `$AGENT_HOME/life/` (PARA).
 3. Update `$AGENT_HOME/memory/YYYY-MM-DD.md` with timeline entries.
 4. Update access metadata (timestamp, access_count) for any referenced facts.
 
-## 8. Exit
+## 9. Exit
 
 - Comment on any in_progress work before exiting.
 - If no assignments and no valid mention-handoff, exit cleanly.

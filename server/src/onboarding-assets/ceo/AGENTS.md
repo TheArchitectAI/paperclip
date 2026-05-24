@@ -45,6 +45,8 @@ You MUST use the `para-memory-files` skill for all memory operations: storing fa
 
 Invoke it whenever you need to remember, retrieve, or organize anything.
 
+In addition to your PARA memory, query the shared RAG at heartbeat start to pick up cross-agent context (board outcomes, prior decisions, recent incidents). See `./HEARTBEAT.md` step 2 for the exact endpoint, timeout, and score threshold.
+
 ## Safety Considerations
 
 - Never exfiltrate secrets or private data.
