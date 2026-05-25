@@ -67,6 +67,7 @@ import { redactCurrentUserText } from "../log-redaction.js";
 import { redactSensitiveText } from "../redaction.js";
 import { resolveIssueGoalId, resolveNextIssueGoalId } from "./issue-goal-fallback.js";
 import { getRunLogStore } from "./run-log-store.js";
+import { logActivity } from "./activity-log.js";
 import { getDefaultCompanyGoal } from "./goals.js";
 import {
   isVerifiedIssueTreeControlInteractionWake,
@@ -4345,14 +4346,80 @@ export function issueService(db: Db) {
       if (patch.status === "in_progress" && !nextAssigneeAgentId && !nextAssigneeUserId) {
         throw unprocessable("in_progress issues require an assignee");
       }
-      if (patch.status === "in_progress") {
-        const unresolvedBlockerIssueIds = blockedByIssueIds !== undefined
-          ? await listUnresolvedBlockerIssueIds(dbOrTx, existing.companyId, blockedByIssueIds)
-          : (
-              await listIssueDependencyReadinessMap(dbOrTx, existing.companyId, [id])
-            ).get(id)?.unresolvedBlockerIssueIds ?? [];
+      // ROCAA-196: data-integrity guard on the issue row.
+      //
+      // Reject two transition shapes against PERSISTED prior state — never
+      // against the caller-provided `blockedByIssueIds` argument, which
+      // would let a buggy/malicious caller bypass the check by clearing
+      // the list in the same PATCH (e.g. `{status: "in_progress",
+      // blockedByIssueIds: []}`):
+      //
+      //   (a) Exit-from-blocked: `existing.status === "blocked"` and the
+      //       patch moves status anywhere except "blocked" while any
+      //       persisted blocker is still not "done". Cancelled blockers
+      //       stay unresolved (matches `issue_blockers_resolved` wake
+      //       semantics — see comment on listIssueDependencyReadinessMap).
+      //   (b) Enter-in_progress: the patch sets status to "in_progress"
+      //       while any persisted blocker is still not "done", regardless
+      //       of `existing.status`. Pre-existing invariant, hardened here
+      //       to drop the caller-trust ternary (see PR description for
+      //       ROCAA-196 for the bypass shape).
+      //
+      // The patch's own `blockedByIssueIds` change is still applied later
+      // (see syncBlockedByIssueIds below) — but only if this guard passes
+      // against the prior state. Per CEO sign-off on ROCAA-196: no bypass
+      // token; the `issue_blockers_resolved` wake path naturally passes
+      // because by the time it fires, all blockers are "done".
+      const exitsBlocked =
+        existing.status === "blocked" &&
+        typeof patch.status === "string" &&
+        patch.status !== "blocked";
+      const entersInProgress = patch.status === "in_progress";
+      if (exitsBlocked || entersInProgress) {
+        const readiness = (
+          await listIssueDependencyReadinessMap(dbOrTx, existing.companyId, [id])
+        ).get(id);
+        const unresolvedBlockerIssueIds = readiness?.unresolvedBlockerIssueIds ?? [];
         if (unresolvedBlockerIssueIds.length > 0) {
-          throw unprocessable("Issue is blocked by unresolved blockers", { unresolvedBlockerIssueIds });
+          // ROCAA-196 AC: structured audit log on rejection. Use the
+          // closure-level `db` (not `dbOrTx`) so the log survives if the
+          // caller wrapped this update in their own transaction that
+          // rolls back on the throw below.
+          const actorType: "agent" | "user" | "system" = actorAgentId
+            ? "agent"
+            : actorUserId
+              ? "user"
+              : "system";
+          const actorId = actorAgentId ?? actorUserId ?? "system";
+          try {
+            await logActivity(db, {
+              companyId: existing.companyId,
+              actorType,
+              actorId,
+              agentId: actorAgentId ?? null,
+              runId: null,
+              action: "issue.status_transition_blocked",
+              entityType: "issue",
+              entityId: id,
+              details: {
+                identifier: existing.identifier,
+                attemptedStatus: patch.status,
+                previousStatus: existing.status,
+                blockerIds: readiness?.blockerIssueIds ?? [],
+                unresolvedBlockerIssueIds,
+              },
+            });
+          } catch (logError) {
+            // Audit log is best-effort; never let a logging failure
+            // mask the underlying 422 to the caller.
+            logger.warn(
+              { err: logError, issueId: id, attemptedStatus: patch.status },
+              "issue.status_transition_blocked log failed",
+            );
+          }
+          throw unprocessable("Issue is blocked by unresolved blockers", {
+            unresolvedBlockerIssueIds,
+          });
         }
       }
       if (issueData.assigneeAgentId) {

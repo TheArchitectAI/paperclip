@@ -2642,6 +2642,134 @@ describeEmbeddedPostgres("issueService blockers and dependency wake readiness", 
       childIssueSummaryTruncated: false,
     });
   });
+
+  // ROCAA-196: blocked-status transition guard regression tests.
+  // The service-layer guard reads PERSISTED blockers (not the patch payload)
+  // so callers cannot bypass by clearing blockedByIssueIds in the same PATCH.
+  describe("ROCAA-196 blocked-status transition guard", () => {
+    async function seedCompanyWithBlockedAndBlocker(opts?: { blockerStatus?: string }) {
+      const blockerStatus = opts?.blockerStatus ?? "todo";
+      const companyId = randomUUID();
+      const assigneeAgentId = randomUUID();
+      await db.insert(companies).values({
+        id: companyId,
+        name: "Paperclip",
+        issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+        requireBoardApprovalForNewAgents: false,
+      });
+      await db.insert(agents).values({
+        id: assigneeAgentId,
+        companyId,
+        name: "CodexCoder",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+      });
+      const blockerId = randomUUID();
+      const blockedId = randomUUID();
+      await db.insert(issues).values([
+        {
+          id: blockerId,
+          companyId,
+          identifier: "PAP-100",
+          title: "Blocker",
+          status: blockerStatus,
+          priority: "medium",
+        },
+        {
+          id: blockedId,
+          companyId,
+          identifier: "PAP-101",
+          title: "Blocked",
+          status: "blocked",
+          priority: "medium",
+          assigneeAgentId,
+        },
+      ]);
+      await svc.update(blockedId, { blockedByIssueIds: [blockerId] });
+      return { companyId, assigneeAgentId, blockerId, blockedId };
+    }
+
+    it("rejects exit-from-blocked when persisted blockers are unresolved", async () => {
+      const { blockedId } = await seedCompanyWithBlockedAndBlocker();
+      await expect(
+        svc.update(blockedId, { status: "todo" }),
+      ).rejects.toMatchObject({ status: 422, message: "Issue is blocked by unresolved blockers" });
+    });
+
+    it("rejects bypass attempt: status=in_progress with cleared blockedByIssueIds", async () => {
+      // Caller-trust attack shape — the previous predicate trusted the patch
+      // payload's blockedByIssueIds to decide unresolved-blocker count, so
+      // `{status: "in_progress", blockedByIssueIds: []}` would slip through.
+      // The new guard reads PERSISTED relations, so this must still 422.
+      const { blockedId } = await seedCompanyWithBlockedAndBlocker();
+      await expect(
+        svc.update(blockedId, { status: "in_progress", blockedByIssueIds: [] }),
+      ).rejects.toMatchObject({ status: 422 });
+    });
+
+    it("allows exit-from-blocked when all persisted blockers are done", async () => {
+      const { blockerId, blockedId } = await seedCompanyWithBlockedAndBlocker();
+      await svc.update(blockerId, { status: "done" });
+      const updated = await svc.update(blockedId, { status: "todo" });
+      expect(updated?.status).toBe("todo");
+    });
+
+    it("allows entry to blocked even when persisted blockers are unresolved", async () => {
+      // Going INTO blocked is always allowed — the guard only restricts
+      // exits and direct promotions to in_progress.
+      const companyId = randomUUID();
+      await db.insert(companies).values({
+        id: companyId,
+        name: "Paperclip",
+        issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+        requireBoardApprovalForNewAgents: false,
+      });
+      const blockerId = randomUUID();
+      const targetId = randomUUID();
+      await db.insert(issues).values([
+        { id: blockerId, companyId, title: "Blocker", status: "todo", priority: "medium" },
+        { id: targetId, companyId, title: "Target", status: "todo", priority: "medium" },
+      ]);
+      await svc.update(targetId, { blockedByIssueIds: [blockerId] });
+      const updated = await svc.update(targetId, { status: "blocked" });
+      expect(updated?.status).toBe("blocked");
+    });
+
+    it("emits issue.status_transition_blocked audit log on rejection", async () => {
+      const { blockedId, blockerId, assigneeAgentId } = await seedCompanyWithBlockedAndBlocker();
+      await expect(
+        svc.update(blockedId, { status: "in_progress", actorAgentId: assigneeAgentId }),
+      ).rejects.toMatchObject({ status: 422 });
+      const logs = await db
+        .select()
+        .from(activityLog)
+        .where(eq(activityLog.entityId, blockedId));
+      const rejectionLog = logs.find((row) => row.action === "issue.status_transition_blocked");
+      expect(rejectionLog).toBeDefined();
+      expect(rejectionLog?.actorType).toBe("agent");
+      expect(rejectionLog?.actorId).toBe(assigneeAgentId);
+      const details = rejectionLog?.details as Record<string, unknown> | null;
+      expect(details).toMatchObject({
+        attemptedStatus: "in_progress",
+        previousStatus: "blocked",
+        unresolvedBlockerIssueIds: [blockerId],
+      });
+    });
+
+    it("does not unblock on cancelled blockers — exit-from-blocked still rejected", async () => {
+      // Cancelled blockers stay unresolved per listIssueDependencyReadinessMap
+      // semantics. Verifies the guard inherits that contract.
+      const { blockerId, blockedId } = await seedCompanyWithBlockedAndBlocker();
+      await svc.update(blockerId, { status: "cancelled" });
+      await expect(
+        svc.update(blockedId, { status: "todo" }),
+      ).rejects.toMatchObject({ status: 422 });
+    });
+  });
 });
 
 describeEmbeddedPostgres("issueService.create workspace inheritance", () => {

@@ -6930,8 +6930,19 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         agentId: agent.id,
       })
     ) {
+      // ROCAA-196: defense-in-depth alongside shouldAutoCheckoutIssueForWake's
+      // isDependencyReady gate — only allow auto-checkout out of "blocked" when
+      // the wake itself was triggered by blockers being resolved. Other wake
+      // reasons (issue_commented, issue_assigned, etc.) must not promote a
+      // blocked issue to in_progress even if dependencies happen to be ready,
+      // because the service-layer guard in issues.ts would reject it anyway.
+      const checkoutWakeReason = readNonEmptyString(context.wakeReason);
+      const expectedStatuses =
+        checkoutWakeReason === "issue_blockers_resolved"
+          ? ["todo", "backlog", "blocked"]
+          : ["todo", "backlog"];
       try {
-        await issuesSvc.checkout(issueId, agent.id, ["todo", "backlog", "blocked"], run.id);
+        await issuesSvc.checkout(issueId, agent.id, expectedStatuses, run.id);
         context[PAPERCLIP_HARNESS_CHECKOUT_KEY] = true;
       } catch (error) {
         if (!isCheckoutConflictError(error)) throw error;
