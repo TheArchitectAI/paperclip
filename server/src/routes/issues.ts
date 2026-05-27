@@ -52,6 +52,13 @@ import {
   assertNoAgentHostWorkspaceCommandMutation,
   collectIssueWorkspaceCommandPaths,
 } from "./workspace-command-authz.js";
+import {
+  enforceHermesIssueCheckoutGuard,
+  enforceHermesIssueCommentGuard,
+  enforceHermesIssueCreateGuard,
+  enforceHermesIssueDeleteGuard,
+  enforceHermesIssuePatchGuard,
+} from "./hermes-mutation-guard.js";
 import { shouldWakeAssigneeOnCheckout } from "./issues-checkout-wakeup.js";
 import {
   isInlineAttachmentContentType,
@@ -1330,6 +1337,7 @@ export function issueRoutes(
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     assertNoAgentHostWorkspaceCommandMutation(req, collectIssueWorkspaceCommandPaths(req.body));
+    enforceHermesIssueCreateGuard(req, req.body);
     if (req.body.assigneeAgentId || req.body.assigneeUserId) {
       await assertCanAssignTasks(req, companyId);
     }
@@ -1381,6 +1389,7 @@ export function issueRoutes(
     }
     assertCompanyAccess(req, existing.companyId);
     assertNoAgentHostWorkspaceCommandMutation(req, collectIssueWorkspaceCommandPaths(req.body));
+    enforceHermesIssuePatchGuard(req, existing, req.body);
     if (!(await assertAgentRunCheckoutOwnership(req, res, existing))) return;
 
     const actor = getActorInfo(req);
@@ -1973,6 +1982,7 @@ export function issueRoutes(
       return;
     }
     assertCompanyAccess(req, existing.companyId);
+    enforceHermesIssueDeleteGuard(req);
     const attachments = await svc.listAttachments(id);
 
     const issue = await svc.remove(id);
@@ -2012,6 +2022,7 @@ export function issueRoutes(
       return;
     }
     assertCompanyAccess(req, issue.companyId);
+    enforceHermesIssueCheckoutGuard(req, issue, req.body.agentId);
 
     if (issue.projectId) {
       const project = await projectsSvc.getById(issue.projectId);
@@ -2320,6 +2331,7 @@ export function issueRoutes(
       return;
     }
     assertCompanyAccess(req, issue.companyId);
+    enforceHermesIssueCommentGuard(req, issue);
     if (!(await assertAgentRunCheckoutOwnership(req, res, issue))) return;
     const closedExecutionWorkspace = await getClosedIssueExecutionWorkspace(issue);
     if (closedExecutionWorkspace) {

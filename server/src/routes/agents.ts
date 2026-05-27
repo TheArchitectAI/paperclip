@@ -2486,6 +2486,12 @@ export function agentRoutes(db: Db) {
     }
     assertCompanyAccess(req, run.companyId);
 
+    if (!run.logStore || !run.logRef) {
+      // Not yet started — return 204 No Content instead of 404 to stop log spam
+      res.status(204).end();
+      return;
+    }
+
     const offset = Number(req.query.offset ?? 0);
     const limitBytes = Number(req.query.limitBytes ?? 256000);
     const result = await heartbeat.readLog(run, {
