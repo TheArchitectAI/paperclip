@@ -1266,10 +1266,14 @@ export function agentRoutes(
 
   function redactForRestrictedAgentView(agent: Awaited<ReturnType<typeof svc.getById>>) {
     if (!agent) return null;
+    // Return an explicit marker so callers can distinguish a redacted config from
+    // a legitimately-empty one. Empty `{}` here previously aliased with real wipes
+    // and caused a false-alarm incident on 2026-06-01 (ROC-140 / ROC-1009).
     return {
       ...agent,
-      adapterConfig: {},
-      runtimeConfig: {},
+      adapterConfig: null,
+      runtimeConfig: null,
+      configRedacted: true as const,
     };
   }
 

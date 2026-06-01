@@ -408,8 +408,10 @@ describe.sequential("agent permission routes", () => {
     const res = await requestApp(app, (baseUrl) => request(baseUrl).get(`/api/agents/${agentId}`));
 
     expect(res.status).toBe(200);
-    expect(res.body.adapterConfig).toEqual({});
-    expect(res.body.runtimeConfig).toEqual({});
+    // ROC-1009: explicit `configRedacted` marker, not the ambiguous empty `{}`.
+    expect(res.body.adapterConfig).toBeNull();
+    expect(res.body.runtimeConfig).toBeNull();
+    expect(res.body.configRedacted).toBe(true);
   }, 20_000);
 
   it("redacts company agent list for authenticated company members without agent admin permission", async () => {
@@ -429,8 +431,10 @@ describe.sequential("agent permission routes", () => {
     expect(res.body).toEqual([
       expect.objectContaining({
         id: agentId,
-        adapterConfig: {},
-        runtimeConfig: {},
+        // ROC-1009: explicit `configRedacted` marker, not the ambiguous empty `{}`.
+        adapterConfig: null,
+        runtimeConfig: null,
+        configRedacted: true,
       }),
     ]);
   });
