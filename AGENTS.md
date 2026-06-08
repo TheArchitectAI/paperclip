@@ -128,7 +128,7 @@ Run the browser suites only when your change touches them or when you are explic
 
 For normal issue work, run the smallest relevant verification first. Do not default to repo-wide typecheck/build/test on every heartbeat when a narrower check is enough to prove the change.
 
-Run this full check before claiming repo work done in a PR-ready hand-off, or when the change scope is broad enough that targeted checks are not sufficient:
+**REQUIRED before opening or updating a PR — no exceptions:**
 
 ```sh
 pnpm -r typecheck
@@ -136,7 +136,9 @@ pnpm test:run
 pnpm build
 ```
 
-If anything cannot be run, explicitly report what was not run and why.
+CI enforces all three. A PR that fails CI blocks the team. If a step genuinely cannot run
+(e.g., environment constraint), explicitly report what was skipped and why in the PR
+description before requesting review. Do NOT open a PR knowing it has TypeScript errors.
 
 ## 8. API and Auth Expectations
 
