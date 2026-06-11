@@ -277,7 +277,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         ? renderTemplate(bootstrapPromptTemplate, templateData).trim()
         : "";
     const sessionHandoffNote = asString(context.paperclipSessionHandoffMarkdown, "").trim();
+    // OpenCode's Bash tool runs commands in a sanitized env that strips
+    // PAPERCLIP_* vars. The adapter writes per-run credentials to a 0600 file
+    // (see prepareOpenCodeRuntimeConfig) and we instruct the agent to `source`
+    // that file at the top of any bash invocation that talks to the Paperclip
+    // API. Without this, the agent has no bearer token and silently no-ops.
+    const credsDirective = preparedRuntimeConfig.credsFilePath
+      ? `IMPORTANT — Paperclip API credentials for this run are in the file \`${preparedRuntimeConfig.credsFilePath}\`. Before any Paperclip API call (curl to $PAPERCLIP_API_URL, etc.), run \`source '${preparedRuntimeConfig.credsFilePath}'\` in the SAME bash invocation, then use $PAPERCLIP_API_KEY / $PAPERCLIP_AGENT_ID / $PAPERCLIP_RUN_ID / $PAPERCLIP_TASK_ID and the other PAPERCLIP_* vars from that file. The credentials are NOT in your shell environment otherwise.`
+      : "";
     const prompt = joinPromptSections([
+      credsDirective,
       instructionsPrefix,
       renderedBootstrapPrompt,
       sessionHandoffNote,
@@ -289,6 +298,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       bootstrapPromptChars: renderedBootstrapPrompt.length,
       sessionHandoffChars: sessionHandoffNote.length,
       heartbeatPromptChars: renderedPrompt.length,
+      credsDirectiveChars: credsDirective.length,
     };
 
     const buildArgs = (resumeSessionId: string | null) => {
