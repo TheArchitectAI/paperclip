@@ -20,6 +20,14 @@ Before making changes, read in this order:
 `doc/SPEC.md` is long-horizon product context.
 `doc/SPEC-implementation.md` is the concrete V1 build contract.
 
+## 2a. Model-Tier Discipline (MANDATORY for Sonnet/Haiku agents)
+
+**If you are a Sonnet- or Haiku-backed agent, you MUST load and follow the `opus-discipline` skill** before acting: plan before acting, read every target file in-session before editing, stop after ~3 discovery calls and state the decision, apply the smallest coherent edit, and verify after mutations with evidence. Cheap-tier models over-flag and under-verify without it.
+
+**Opus-backed agents** already embody this discipline — do NOT load the skill (redundant). **Gemini reviewer/gate** agents are exempt (their job is independent audit, not implementation).
+
+Skill: `~/.claude/skills/opus-discipline/SKILL.md`.
+
 ## 3. Repo Map
 
 - `server/`: Express REST API and orchestration services
