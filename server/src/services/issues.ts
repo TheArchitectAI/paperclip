@@ -1323,6 +1323,39 @@ export function issueService(db: Db) {
       return relations.get(issueId) ?? { blockedBy: [], blocks: [] };
     },
 
+    // ROC-3243: server-side recompute of "fresh escalations" for a routine_execution ticket.
+    // An escalation is, by construction, a content write the run made to a DIFFERENT issue
+    // (an SLA scanner surfaces customer/NPI data by commenting on / labelling the affected
+    // borrower ticket — never on its own execution ticket). We count, from the SERVER-OWNED
+    // activity log keyed by the immutable originRunId, distinct OTHER issues this run wrote to.
+    // The agent cannot forge or suppress these entries: to escalate it MUST write the other
+    // ticket (which logs here); to make the count read 0 it must NOT escalate at all (an ops
+    // miss, never an NPI-in-a-closed-ticket leak). Returns a count; 0 ⇒ provably empty digest.
+    countRunCrossIssueWrites: async (
+      runId: string,
+      excludeIssueId: string,
+      companyId: string,
+    ): Promise<number> => {
+      const rows = await db
+        .select({ entityId: activityLog.entityId })
+        .from(activityLog)
+        .where(
+          and(
+            eq(activityLog.runId, runId),
+            eq(activityLog.companyId, companyId),
+            eq(activityLog.entityType, "issue"),
+            ne(activityLog.entityId, excludeIssueId),
+            inArray(activityLog.action, [
+              "issue.created",
+              "issue.updated",
+              "issue.comment_added",
+            ]),
+          ),
+        );
+      const distinct = new Set(rows.map((r) => r.entityId));
+      return distinct.size;
+    },
+
     listWakeableBlockedDependents: async (blockerIssueId: string) => {
       const blockerIssue = await db
         .select({ id: issues.id, companyId: issues.companyId })

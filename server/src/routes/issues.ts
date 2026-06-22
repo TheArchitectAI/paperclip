@@ -1489,12 +1489,57 @@ export function issueRoutes(
         !isClosedIssueStatus(existing.status) &&
         _gateList.includes(existing.companyId)
       ) {
-        res.status(409).json({
-          error:
-            "Tier-1 close-gate: closing a customer/NPI/live-loan ticket requires human sign-off. A board user must close it.",
-          code: "close_gate_human_required",
-        });
-        return;
+        // ROC-3243 narrow exception: an agent MAY self-close an empty routine_execution
+        // ticket. Both conditions are verified server-side from platform-set, non-spoofable
+        // state — the agent's assertion is never trusted:
+        //   (1) originKind === "routine_execution"  (set at routine fire, line ~785 routines.ts)
+        //   (2) fresh escalations recomputed === 0   (countRunCrossIssueWrites over the
+        //       immutable originRunId's activity log — see issues.ts service)
+        // A 0-cross-write run produced a digest listing no borrowers ⇒ provably no NPI in the
+        // closed artifact. Any run with escalations (>0) wrote a borrower ticket ⇒ stays gated.
+        // Disabled unless CLOSE_GATE_ROUTINE_EXEMPTION is truthy (fail-closed by default).
+        const _exemptionOn = /^(1|true|yes|on)$/i.test(
+          (process.env.CLOSE_GATE_ROUTINE_EXEMPTION ?? "").trim(),
+        );
+        let _allowRoutineSelfClose = false;
+        if (_exemptionOn && existing.originKind === "routine_execution" && existing.originRunId) {
+          try {
+            const freshEscalations = await svc.countRunCrossIssueWrites(
+              existing.originRunId,
+              existing.id,
+              existing.companyId,
+            );
+            _allowRoutineSelfClose = freshEscalations === 0;
+            if (_allowRoutineSelfClose) {
+              await logActivity(db, {
+                companyId: existing.companyId,
+                actorType: actor.actorType,
+                actorId: actor.actorId,
+                agentId: actor.agentId,
+                runId: actor.runId,
+                action: "issue.close_gate_routine_exempted",
+                entityType: "issue",
+                entityId: existing.id,
+                details: {
+                  originRunId: existing.originRunId,
+                  freshEscalations,
+                  newStatus: _newStatus,
+                },
+              });
+            }
+          } catch {
+            // Recompute failed → fail-closed: leave the gate engaged.
+            _allowRoutineSelfClose = false;
+          }
+        }
+        if (!_allowRoutineSelfClose) {
+          res.status(409).json({
+            error:
+              "Tier-1 close-gate: closing a customer/NPI/live-loan ticket requires human sign-off. A board user must close it.",
+            code: "close_gate_human_required",
+          });
+          return;
+        }
       }
     }
 
