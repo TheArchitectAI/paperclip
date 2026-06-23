@@ -1,12 +1,14 @@
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { approvalComments, approvals } from "@paperclipai/db";
+import { approvalComments, approvals, issueApprovals } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
+import { logger } from "../middleware/logger.js";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { agentService } from "./agents.js";
 import { budgetService } from "./budgets.js";
 import { notifyHireApproved } from "./hire-hook.js";
 import { instanceSettingsService } from "./instance-settings.js";
+import { backfillFeedbackForApproval } from "./telemetry-backfill.js";
 
 export function approvalService(db: Db) {
   const agentsSvc = agentService(db);
@@ -78,6 +80,16 @@ export function approvalService(db: Db) {
     );
   }
 
+  async function getPrimaryIssueIdForApproval(approvalId: string): Promise<string | null> {
+    return db
+      .select({ issueId: issueApprovals.issueId })
+      .from(issueApprovals)
+      .where(eq(issueApprovals.approvalId, approvalId))
+      .orderBy(desc(issueApprovals.createdAt))
+      .limit(1)
+      .then((rows) => rows[0]?.issueId ?? null);
+  }
+
   return {
     list: (companyId: string, status?: string) => {
       const conditions = [eq(approvals.companyId, companyId)];
@@ -106,6 +118,20 @@ export function approvalService(db: Db) {
         decidedByUserId,
         decisionNote,
       );
+
+      if (applied) {
+        try {
+          const issueId = await getPrimaryIssueIdForApproval(updated.id);
+          if (issueId) {
+            await backfillFeedbackForApproval(db, issueId, "approved");
+          }
+        } catch (err) {
+          logger.error(
+            { err, approvalId: updated.id },
+            "approval feedback backfill failed (non-fatal)",
+          );
+        }
+      }
 
       let hireApprovedAgentId: string | null = null;
       const now = new Date();
@@ -175,6 +201,20 @@ export function approvalService(db: Db) {
         decidedByUserId,
         decisionNote,
       );
+
+      if (applied) {
+        try {
+          const issueId = await getPrimaryIssueIdForApproval(updated.id);
+          if (issueId) {
+            await backfillFeedbackForApproval(db, issueId, "rejected");
+          }
+        } catch (err) {
+          logger.error(
+            { err, approvalId: updated.id },
+            "approval feedback backfill failed (non-fatal)",
+          );
+        }
+      }
 
       if (applied && updated.type === "hire_agent") {
         const payload = updated.payload as Record<string, unknown>;

@@ -33,8 +33,10 @@ import {
 } from "./execution-workspace-policy.js";
 import { instanceSettingsService } from "./instance-settings.js";
 import { redactCurrentUserText } from "../log-redaction.js";
+import { logger } from "../middleware/logger.js";
 import { resolveIssueGoalId, resolveNextIssueGoalId } from "./issue-goal-fallback.js";
 import { getDefaultCompanyGoal } from "./goals.js";
+import { backfillOutcomeForClosedIssue } from "./telemetry-backfill.js";
 
 const ALL_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked", "done", "cancelled"];
 const MAX_ISSUE_COMMENT_PAGE_LIMIT = 500;
@@ -1772,7 +1774,20 @@ export function issueService(db: Db) {
         return enriched;
       };
 
-      return dbOrTx === db ? db.transaction(runUpdate) : runUpdate(dbOrTx);
+      const updated = dbOrTx === db ? await db.transaction(runUpdate) : await runUpdate(dbOrTx);
+
+      if (updated && (issueData.status === "done" || issueData.status === "cancelled")) {
+        try {
+          await backfillOutcomeForClosedIssue(dbOrTx, updated.id, updated.status);
+        } catch (err) {
+          logger.error(
+            { err, issueId: updated.id, issueStatus: updated.status },
+            "issue outcome backfill failed (non-fatal)",
+          );
+        }
+      }
+
+      return updated;
     },
 
     remove: (id: string) =>
