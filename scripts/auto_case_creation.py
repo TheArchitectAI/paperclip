@@ -1,17 +1,17 @@
 import urllib.request
 import json
 import os
-import os
+import sys
 
-API_KEY="pit-1138def5-390b-4ffb-b8e9-30b2ea6b5990"
-# WRONG API KEY for production? Check if we have another?
-# Let's try listing the directory to see if there's a better one?
-# Wait, I already know this one works for listing one contact.
-# Maybe I need to explicitly pass the Location Header or something?
-# The error is 403 Forbidden.
-# In my manual test: curl -s -H "Authorization: Bearer pit-11...90" ... WORKS.
-# Maybe it's the User-Agent?
-# Let's add a User-Agent header.
+# GHL Private Integration Token. NEVER hardcode — read from the environment.
+# Canonical source: GCP Secret Manager secret GHL_API_KEY (project silver-pad-459411-e7),
+# injected as env var GHL_PIT_TOKEN (falls back to GHL_API_KEY). Fail closed if absent.
+API_KEY = os.environ.get("GHL_PIT_TOKEN") or os.environ.get("GHL_API_KEY")
+if not API_KEY:
+    sys.exit(
+        "FATAL: GHL_PIT_TOKEN (or GHL_API_KEY) not set. "
+        "Export it from Secret Manager before running; never hardcode the token."
+    )
 GHL_BASE_URL="https://services.leadconnectorhq.com"
 LOCATION_ID = "y5eLFi2NFVoin9FxJiyc"
 PAPERCLIP_API_URL = "http://127.0.0.1:3101/api/companies/5c2551e8-cb65-4ab4-9fee-8e0001be2e41/issues"

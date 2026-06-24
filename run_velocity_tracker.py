@@ -29,7 +29,7 @@ def api_request(path, method="GET", data=None):
 def main():
     print("Executing Q3 Velocity Check...")
     # Run the check script
-    cmd = ["python3", "/home/dwizy/architect-os/scripts/q3_pipeline_check.py"]
+    cmd = ["python3", "/home/dwizy/paperclip-gce/src/q3_pipeline_check.py"]
     res = subprocess.run(cmd, capture_output=True, text=True)
     
     print("STDOUT:")
@@ -38,7 +38,7 @@ def main():
     print(res.stderr)
     
     # Read the generated log
-    log_path = "/home/dwizy/architect-os/logs/q3-velocity-check.last.log"
+    log_path = "/home/dwizy/paperclip-gce/src/q3-velocity-check.last.log"
     if os.path.exists(log_path):
         with open(log_path, "r") as f:
             report_content = f.read()

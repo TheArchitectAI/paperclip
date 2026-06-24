@@ -1,6 +1,11 @@
 import urllib.request
 import json
-API_KEY="pit-1138def5-390b-4ffb-b8e9-30b2ea6b5990"
+import os
+import sys
+# GHL PIT — read from env (Secret Manager GHL_API_KEY), never hardcode. Fail closed.
+API_KEY = os.environ.get("GHL_PIT_TOKEN") or os.environ.get("GHL_API_KEY")
+if not API_KEY:
+    sys.exit("FATAL: GHL_PIT_TOKEN (or GHL_API_KEY) not set; never hardcode the token.")
 GHL_BASE_URL="https://services.leadconnectorhq.com"
 PAPERCLIP_API_URL = "http://127.0.0.1:3101/api/companies/5c2551e8-cb65-4ab4-9fee-8e0001be2e41/issues"
 def ghl_api_call(url_path, method="GET", body=None):

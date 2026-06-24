@@ -72,3 +72,8 @@ projects.json
 payload.json
 processing_results.json
 sf_preapproval_issued.json
+
+# --- tidy: scratch text dumps ---
+checklist_id.txt
+issues_list.txt
+reengagement_daniel_reyes.txt
