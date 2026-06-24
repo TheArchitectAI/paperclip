@@ -1,0 +1,9 @@
+{
+  "name": "@paperclipai/ghl-facebook-capi-relay",
+  "version": "0.1.0",
+  "description": "GHL to Facebook Conversions API (CAPI) relay for high-quality lead tracking.",
+  "main": "src/index.ts",
+  "dependencies": {
+    "facebook-nodejs-business-sdk": "^18.0.0"
+  }
+}

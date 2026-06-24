@@ -1,0 +1,11 @@
+{
+  "name": "ghl-facebook-capi-relay",
+  "version": "0.1.0",
+  "capabilities": ["webhooks.receive"],
+  "webhooks": [
+    {
+      "endpointKey": "ghl-webhook",
+      "description": "Receive GHL lead events"
+    }
+  ]
+}
