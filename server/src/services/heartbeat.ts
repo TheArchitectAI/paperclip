@@ -561,6 +561,7 @@ interface WakeupOptions {
 type UsageTotals = {
   inputTokens: number;
   cachedInputTokens: number;
+  cacheCreationInputTokens: number;
   outputTokens: number;
 };
 
@@ -803,6 +804,7 @@ function normalizeUsageTotals(usage: UsageSummary | null | undefined): UsageTota
   return {
     inputTokens: Math.max(0, Math.floor(asNumber(usage.inputTokens, 0))),
     cachedInputTokens: Math.max(0, Math.floor(asNumber(usage.cachedInputTokens, 0))),
+    cacheCreationInputTokens: Math.max(0, Math.floor(asNumber(usage.cacheCreationInputTokens, 0))),
     outputTokens: Math.max(0, Math.floor(asNumber(usage.outputTokens, 0))),
   };
 }
@@ -823,8 +825,12 @@ function readRawUsageTotals(usageJson: unknown): UsageTotals | null {
     0,
     Math.floor(asNumber(parsed.rawOutputTokens, asNumber(parsed.outputTokens, 0))),
   );
+  const cacheCreationInputTokens = Math.max(
+    0,
+    Math.floor(asNumber(parsed.rawCacheCreationInputTokens, asNumber(parsed.cacheCreationInputTokens, 0))),
+  );
 
-  if (inputTokens <= 0 && cachedInputTokens <= 0 && outputTokens <= 0) {
+  if (inputTokens <= 0 && cachedInputTokens <= 0 && outputTokens <= 0 && cacheCreationInputTokens <= 0) {
     return null;
   }
 
@@ -832,6 +838,7 @@ function readRawUsageTotals(usageJson: unknown): UsageTotals | null {
     inputTokens,
     cachedInputTokens,
     outputTokens,
+    cacheCreationInputTokens,
   };
 }
 
@@ -848,11 +855,15 @@ function deriveNormalizedUsageDelta(current: UsageTotals | null, previous: Usage
   const outputTokens = current.outputTokens >= previous.outputTokens
     ? current.outputTokens - previous.outputTokens
     : current.outputTokens;
+  const cacheCreationInputTokens = current.cacheCreationInputTokens >= previous.cacheCreationInputTokens
+    ? current.cacheCreationInputTokens - previous.cacheCreationInputTokens
+    : current.cacheCreationInputTokens;
 
   return {
     inputTokens: Math.max(0, inputTokens),
     cachedInputTokens: Math.max(0, cachedInputTokens),
     outputTokens: Math.max(0, outputTokens),
+    cacheCreationInputTokens: Math.max(0, cacheCreationInputTokens),
   };
 }
 
