@@ -54,3 +54,21 @@ tests/release-smoke/test-results/
 tests/release-smoke/playwright-report/
 .superset/
 .claude/worktrees/
+
+# --- tidy: scratch + runtime ignores ---
+# python
+venv/
+__pycache__/
+*.pyc
+# agent runtime scratch
+workspace/
+.codex
+vault/outlook/
+# ad-hoc data dumps
+backlog.json
+current_issues.json
+issues.json
+projects.json
+payload.json
+processing_results.json
+sf_preapproval_issued.json
