@@ -85,6 +85,7 @@ import { buildExternalAdapters } from "./plugin-loader.js";
 import { getDisabledAdapterTypes } from "../services/adapter-plugin-store.js";
 import { processAdapter } from "./process/index.js";
 import { httpAdapter } from "./http/index.js";
+import { langgraphAdapter } from "./langgraph/index.js";
 
 const claudeLocalAdapter: ServerAdapterModule = {
   type: "claude_local",
@@ -238,6 +239,7 @@ function registerBuiltInAdapters() {
     openclawGatewayAdapter,
     processAdapter,
     httpAdapter,
+    langgraphAdapter,
     hermesLocalAdapter,
   ]) {
     adaptersByType.set(adapter.type, adapter);

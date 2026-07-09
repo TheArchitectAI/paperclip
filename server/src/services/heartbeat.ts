@@ -3941,6 +3941,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         runtime: runtimeForAdapter,
         config: runtimeConfig,
         context,
+        db,
         onLog,
         onMeta: onAdapterMeta,
         onSpawn: async (meta) => {

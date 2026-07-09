@@ -230,6 +230,11 @@ export interface AdapterExecutionContext {
   runtime: AdapterRuntime;
   config: Record<string, unknown>;
   context: Record<string, unknown>;
+  /**
+   * Server-owned database handle. In-tree adapters may use this to create
+   * Paperclip records without opening a second application pool.
+   */
+  db?: unknown;
   onLog: (stream: "stdout" | "stderr", chunk: string) => Promise<void>;
   onMeta?: (meta: AdapterInvocationMeta) => Promise<void>;
   onSpawn?: (meta: { pid: number; processGroupId: number | null; startedAt: string }) => Promise<void>;
